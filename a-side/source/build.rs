@@ -25,7 +25,12 @@ fn main() {
 
     std::fs::write(&mod_file, mod_content).unwrap();
     let _ = Command::new("rustfmt")
-        .args([&mod_file, &format!("{}/storage.rs", out_dir)])
+        .args([
+            "--edition",
+            "2021",
+            &mod_file,
+            &format!("{}/storage.rs", out_dir),
+        ])
         .status();
 
     let mut aidl = rsbinder_aidl::Builder::new()

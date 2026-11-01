@@ -10,6 +10,10 @@ pub const AIDL_GET_INTERFACE_VERSION_TRANSACTION: u32 = 0x00ff_ffff;
 pub const AID_ROOT: u32 = 0;
 pub const AID_SYSTEM: u32 = 1000;
 pub const AID_KEYSTORE: u32 = 1017;
+pub const AID_INET: u32 = 3003;
+
+/// DER AttestationApplicationId containing empty package and signature sets.
+pub const EMPTY_ATTESTATION_APPLICATION_ID_DER: &[u8] = &[0x30, 0x04, 0x31, 0x00, 0x31, 0x00];
 pub const AID_APP_START: u32 = 10_000;
 pub const AID_USER_OFFSET: u32 = 100_000;
 pub const KEYSTORE_UID: libc::uid_t = AID_KEYSTORE as libc::uid_t;

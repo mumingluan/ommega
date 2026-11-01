@@ -34,3 +34,18 @@ chmod 0771 "$DATA_ROOT" 2>/dev/null
 # logs 用 sticky：app 域（SOTER 宿主不是 keystore uid）的 payload 要往这里写日志，
 # 不开 other 写它就落不下档；sticky 位拦住删掉 / 改名别人的文件。
 chmod 1777 "$DATA_ROOT/logs" 2>/dev/null
+
+# An optional fixed storage binding keeps existing software keyblobs readable
+# when a remote identity changes the public vbmeta properties. This is a public
+# digest, not key material; it uses the existing OMMEGA_BOOT_KEY fallback.
+_ommega_storage_key=/data/misc/keystore/ommega/data/storage_boot_key
+if [ -r "$_ommega_storage_key" ]; then
+  _ommega_storage_value=$(cat "$_ommega_storage_key" 2>/dev/null)
+  if [ "${#_ommega_storage_value}" -eq 64 ]; then
+    case "$_ommega_storage_value" in
+      *[!0-9a-fA-F]*) ;;
+      *) OMMEGA_BOOT_KEY=$_ommega_storage_value; export OMMEGA_BOOT_KEY ;;
+    esac
+  fi
+fi
+unset _ommega_storage_key _ommega_storage_value

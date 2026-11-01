@@ -9,7 +9,7 @@ use std::panic;
 use std::sync::Arc;
 use std::{ffi::CString, os::unix::fs::PermissionsExt, path::Path};
 
-use kmr_common::consts::{KEYSTORE_GID, KEYSTORE_UID};
+use kmr_common::consts::{AID_INET, KEYSTORE_GID, KEYSTORE_UID};
 use kmr_common::rpc;
 use kmr_common::selinux::{clear_sockcreate_con, set_sockcreate_con};
 use log::{debug, error, info, warn, LevelFilter};
@@ -124,7 +124,11 @@ fn prepare_android_storage() {
     // logs 必须是 1777 而不是 0777：注入到 app 域（SOTER 宿主不是 keystore uid）的
     // payload 得往这里落日志，光靠 group 写不够。sticky 位拦住「删掉/改名别人的
     // 日志文件」和拿软链顶替已有日志那条路，写内容还是允许的。
-    for (dir, mode) in [(root_path!(), 0o771), (root_path!("logs"), 0o1777)] {
+    for (dir, mode) in [
+        (root_path!(), 0o771),
+        (root_path!("logs"), 0o1777),
+        (secret_path!(), 0o770),
+    ] {
         if let Err(e) = std::fs::create_dir_all(dir) {
             storage_warn(format!("Failed to create ommega directory {dir}: {e:?}"));
             continue;
@@ -323,6 +327,23 @@ fn create_rpc_server(bind: RpcBind) -> Result<Arc<RpcServer>> {
 }
 
 fn set_keystore_identity() -> Result<()> {
+    // Android's dnsproxyd socket requires the inet supplementary group.
+    // Preserve any groups supplied by the root manager before dropping uid/gid.
+    let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+    if count < 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to read supplementary groups");
+    }
+    let mut groups = vec![0 as libc::gid_t; count as usize];
+    if unsafe { libc::getgroups(count, groups.as_mut_ptr()) } < 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to read supplementary groups");
+    }
+    if !groups.contains(&(AID_INET as libc::gid_t)) {
+        groups.push(AID_INET as libc::gid_t);
+        if unsafe { libc::setgroups(groups.len(), groups.as_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to retain Android DNS socket access");
+        }
+    }
     let failed = unsafe { libc::setgid(KEYSTORE_GID) != 0 || libc::setuid(KEYSTORE_UID) != 0 };
     if failed {
         return Err(std::io::Error::last_os_error()).context("failed to enter keystore uid/gid");
@@ -387,11 +408,7 @@ fn main() {
     }
 }
 
-/// True if the boot root-of-trust changed on this boot and invalidated every
-/// keyblob in the persistent keystore database.  Detecting the exact error the
-/// TA reports (`INVALID_KEY_BLOB`) lets us distinguish "ROT changed" from real
-/// corruption, so we only wipe the database in the one case where wiping is
-/// the only recovery.
+/// Identify an unreadable boot-level key without discarding persistent keys.
 fn is_root_of_trust_mismatch(error: &anyhow::Error) -> bool {
     matches!(
         error
@@ -401,27 +418,6 @@ fn is_root_of_trust_mismatch(error: &anyhow::Error) -> bool {
             crate::android::hardware::security::keymint::ErrorCode::ErrorCode::INVALID_KEY_BLOB,
         ))
     )
-}
-
-/// Remove the persistent keystore database (and the secure-deletion data file)
-/// so that a fresh one is built against the new root of trust on restart.
-/// The SDD file is re-created on demand, so dropping it is harmless.
-fn clear_ommega_keymaster_db() -> Result<()> {
-    let db_root = crate::global::db_root_path();
-    for name in [
-        "keymaster.db",
-        "keymaster.db-wal",
-        "keymaster.db-shm",
-        "keymint.dat",
-    ] {
-        let path = db_root.join(name);
-        match std::fs::remove_file(&path) {
-            Ok(()) => info!("removed {path:?} after root-of-trust change"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => warn!("failed to remove {path:?}: {e}"),
-        }
-    }
-    Ok(())
 }
 
 fn run() -> Result<()> {
@@ -465,21 +461,8 @@ fn run() -> Result<()> {
         )
     });
     if let Err(error) = boot_level_cache {
-        // Changing ro.boot.vbmeta.digest / ro.boot.vbmeta.public_key_digest (the
-        // WebUI boot-hash / boot-key settings) changes the device root of trust,
-        // which makes every keyblob in keymaster.db undecryptable.  The old keys
-        // are unusable no matter what, so drop the database and exit cleanly:
-        // the daemon watchdog restarts us and a fresh DB is built against the
-        // new ROT.  Any other error is a real startup failure.
         if is_root_of_trust_mismatch(&error) {
-            warn!(
-                "boot root-of-trust changed; clearing ommega keymaster.db and restarting to rebuild: {error:#}"
-            );
-            if let Err(cleanup_error) = clear_ommega_keymaster_db() {
-                error!("failed to clear ommega keymaster.db after ROT change: {cleanup_error:#}");
-                return Err(error);
-            }
-            std::process::exit(0);
+            error!("boot-level key cannot be decoded; preserving persistent database: {error:#}");
         }
         return Err(error).context("failed to initialize boot-level key cache");
     }

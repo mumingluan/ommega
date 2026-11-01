@@ -19,6 +19,11 @@ RUN_DIR=$STATE_DIR/run
 DB_DIR=$STATE_DIR/db
 [ -f "$MODDIR/layout.sh" ] && . "$MODDIR/layout.sh" 2>/dev/null
 
+# The unprivileged keystore process creates rpc.sock here.
+mkdir -p /data/misc/keystore/ommega
+chown 1017:1017 /data/misc/keystore/ommega
+chmod 0770 /data/misc/keystore/ommega
+
 # KernelSU 开机不会重放 sepolicy.rule，而 keystore 域要读 /data/misc/ommega。
 # 这里是能抢在 keystore2 之前跑的最早时机，所以同步应用（带超时）。
 #

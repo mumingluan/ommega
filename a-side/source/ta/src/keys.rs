@@ -476,12 +476,11 @@ impl crate::KeyMintTa {
             let params: &[KeyParam] = if auto_challenge && !wants_attest_challenge {
                 owned = params.to_vec();
                 // 远程出证要求带 app id，而生成 ATTEST_KEY 时 App 通常不带 ——
-                // 自己补一个最小的合法 `AttestationApplicationId`（`SEQUENCE { SET {} }`，
-                // 空的 packageInfos），而不是因为这个可选字段把整笔转发放弃。
+                // Both packageInfos and signatureDigests are required, even when empty.
                 if !has_app_id {
-                    // 空 `SEQUENCE OF`：B 端 `check_app_id_der` 只认 SET OF / SEQUENCE OF
-                    // 两种编码，之前写的 `SEQUENCE { SET {} }` 会被判成非法。
-                    owned.push(KeyParam::AttestationApplicationId(vec![0x30, 0x00]));
+                    owned.push(KeyParam::AttestationApplicationId(
+                        kmr_common::consts::EMPTY_ATTESTATION_APPLICATION_ID_DER.to_vec(),
+                    ));
                 }
                 let mut challenge = vec![0u8; 32];
                 self.imp.rng.fill_bytes(&mut challenge);
